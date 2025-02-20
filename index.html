@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok's Cosmic Countdown</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #0a0a0a; }
+    canvas { display: block; }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: 'Orbitron', Arial, sans-serif;
+      text-align: center;
+    }
+    #audio-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-family: 'Orbitron', Arial, sans-serif;
+      text-align: right;
+      color: #fff;
+    }
+    #left-arrow {
+      position: absolute;
+      top: 50%;
+      left: 10px;
+      transform: translateY(-50%);
+    }
+    #right-arrow {
+      position: absolute;
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+    }
+    button {
+      background: transparent;
+      border: 2px solid #00ffff;
+      color: #00ffff;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 16px;
+      font-family: 'Orbitron', Arial, sans-serif;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      box-shadow: 0 0 5px #00ffff;
+    }
+    button:hover {
+      background: rgba(0, 255, 255, 0.1);
+      box-shadow: 0 0 15px #00ffff, 0 0 30px #00ffff;
+      transform: scale(1.05);
+    }
+    #zoom-slider {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+    }
+    #volume-slider {
+      width: 100px;
+      vertical-align: middle;
+    }
+    #click-note {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-family: 'Orbitron', Arial, sans-serif;
+      font-size: 14px;
+      opacity: 0.8;
+    }
+    #fullscreen-button {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="ui">
+    <button id="start-button" aria-label="Launch or pause countdown">Launch Countdown (Space)</button>
+  </div>
+  <div id="audio-controls">
+    <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="0.5" aria-label="Voice volume control">
+    <button id="mute-button" aria-label="Toggle mute">Mute</button>
+  </div>
+  <button id="left-arrow" aria-label="Next planet">←</button>
+  <button id="right-arrow" aria-label="Previous planet">→</button>
+  <button id="fullscreen-button" aria-label="Toggle full screen">Full Screen</button>
+  <input type="range" id="zoom-slider" min="5" max="50" value="19.5" step="0.1" role="slider" aria-label="Zoom level">
+  <div id="click-note">Drag to rotate | Scroll to zoom</div>
+  <script type="module">
+    import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
+    import { FontLoader } from 'https://cdn.skypack.dev/three@0.136.0/examples/jsm/loaders/FontLoader.js';
+    import { TextGeometry } from 'https://cdn.skypack.dev/three@0.136.0/examples/jsm/geometries/TextGeometry.js';
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const planets = [
+      { name: 'Pluto', timer: 300, radius: 3, color: 0x808080 },
+      { name: 'Neptune', timer: 180, radius: 6, color: 0x0000ff },
+      { name: 'Uranus', timer: 120, radius: 6, color: 0x00ffff },
+      { name: 'Saturn', timer: 90, radius: 6.5, hasRing: true },
+      { name: 'Jupiter', timer: 60, radius: 7 },
+      { name: 'Mars', timer: 45, radius: 4.5, color: 0xff0000 },
+      { name: 'Earth', timer: 30, radius: 5 },
+      { name: 'Venus', timer: 20, radius: 4, color: 0xffa500 },
+      { name: 'Mercury', timer: 15, radius: 3.5, color: 0xaaaaaa },
+      { name: 'Sun', timer: 10, radius: 8, color: 0xffff00 }
+    ];
+
+    let currentPlanetIndex = 6; 
+    let currentPlanetGroup;
+    let font, textHeight = 0.1;
+    let countdownInterval;
+    let isDragging = false;
+    let previousMousePosition = { x: 0, y: 0 };
+    let isAnimating = false;
+    let animationStartTime;
+    let animationType = '';
+    let digitFinalPositions = [];
+    let planetState = 'ready';
+    let isPaused = false;
+    let isTransitioning = false;
+    let isFullScreen = false;
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0.5;
+    const convolver = audioCtx.createConvolver();
+    gainNode.connect(convolver);
+    convolver.connect(audioCtx.destination);
+
+    function createReverbImpulse() {
+      const length = audioCtx.sampleRate * 1;
+      const impulse = audioCtx.createBuffer(2, length, audioCtx.sampleRate);
+      const left = impulse.getChannelData(0);
+      const right = impulse.getChannelData(1);
+      for (let i = 0; i < length; i++) {
+        const decay = Math.exp(-i / (audioCtx.sampleRate * 0.5));
+        left[i] = (Math.random() * 2 - 1) * decay * 0.5;
+        right[i] = (Math.random() * 2 - 1) * decay * 0.5;
+      }
+      convolver.buffer = impulse;
+    }
+    createReverbImpulse();
+
+    const volumeSlider = document.getElementById('volume-slider');
+    const muteButton = document.getElementById('mute-button');
+    let isMuted = false;
+
+    volumeSlider.addEventListener('input', () => {
+      const volume = parseFloat(volumeSlider.value);
+      gainNode.gain.value = isMuted ? 0 : volume;
+    });
+
+    muteButton.addEventListener('click', () => {
+      isMuted = !isMuted;
+      muteButton.textContent = isMuted ? 'Unmute' : 'Mute';
+      gainNode.gain.value = isMuted ? 0 : parseFloat(volumeSlider.value);
+      if (isMuted) window.speechSynthesis.cancel();
+    });
+
+    // Updated speak function to speed up numbers 20 and above by 20%
+    const speak = (text) => {
+      if (!isMuted) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        // Default rate is 1.2; if the number is 20 or above, increase the rate by 20%
+        const value = parseInt(text, 10);
+        if (!isNaN(value) && value >= 20) {
+          utterance.rate = 1.2 * 1.2;
+        } else {
+          utterance.rate = 1.2;
+        }
+        window.speechSynthesis.speak(utterance);
+      }
+    };
+
+    const fullscreenButton = document.getElementById('fullscreen-button');
+    fullscreenButton.addEventListener('click', () => {
+      if (!isFullScreen) {
+        document.documentElement.requestFullscreen();
+        document.getElementById('ui').classList.add('hidden');
+        document.getElementById('audio-controls').classList.add('hidden');
+        document.getElementById('left-arrow').classList.add('hidden');
+        document.getElementById('right-arrow').classList.add('hidden');
+        document.getElementById('fullscreen-button').classList.add('hidden');
+        document.getElementById('zoom-slider').classList.add('hidden');
+        document.getElementById('click-note').classList.add('hidden');
+        fullscreenButton.textContent = 'Exit Full Screen';
+      } else {
+        document.exitFullscreen();
+        document.getElementById('ui').classList.remove('hidden');
+        document.getElementById('audio-controls').classList.remove('hidden');
+        document.getElementById('left-arrow').classList.remove('hidden');
+        document.getElementById('right-arrow').classList.remove('hidden');
+        document.getElementById('fullscreen-button').classList.remove('hidden');
+        document.getElementById('zoom-slider').classList.remove('hidden');
+        document.getElementById('click-note').classList.remove('hidden');
+        fullscreenButton.textContent = 'Full Screen';
+      }
+      isFullScreen = !isFullScreen;
+    });
+
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && isFullScreen) {
+        isFullScreen = false;
+        fullscreenButton.textContent = 'Full Screen';
+        document.getElementById('ui').classList.remove('hidden');
+        document.getElementById('audio-controls').classList.remove('hidden');
+        document.getElementById('left-arrow').classList.remove('hidden');
+        document.getElementById('right-arrow').classList.remove('hidden');
+        document.getElementById('fullscreen-button').classList.remove('hidden');
+        document.getElementById('zoom-slider').classList.remove('hidden');
+        document.getElementById('click-note').classList.remove('hidden');
+      }
+    });
+
+    scene.add(new THREE.AmbientLight(0x404040, 0.5));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, 5, 5);
+    scene.add(dirLight);
+    const pointLight = new THREE.PointLight(0xffffff, 1, 50);
+    pointLight.position.set(0, 0, 15);
+    scene.add(pointLight);
+
+    const starGeometry = new THREE.BufferGeometry();
+    const starCount = 5000;
+    const positions = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      positions[i * 3] = (Math.random() - 0.5) * 2000;
+      positions[i * 3 + 1] = (Math.random() - 0.5) * 2000;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 2000;
+    }
+    starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
+    const stars = new THREE.Points(starGeometry, starMaterial);
+    scene.add(stars);
+
+    renderer.domElement.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      previousMousePosition.x = e.clientX;
+      previousMousePosition.y = e.clientY;
+    });
+    renderer.domElement.addEventListener('mousemove', (e) => {
+      if (!isDragging || !currentPlanetGroup) return;
+      const deltaX = e.clientX - previousMousePosition.x;
+      const deltaY = e.clientY - previousMousePosition.y;
+      currentPlanetGroup.rotation.y += deltaX * 0.005;
+      currentPlanetGroup.rotation.x += deltaY * 0.005;
+      previousMousePosition.x = e.clientX;
+      previousMousePosition.y = e.clientY;
+    });
+    renderer.domElement.addEventListener('mouseup', () => isDragging = false);
+    renderer.domElement.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      camera.position.z += e.deltaY * 0.01;
+      camera.position.z = Math.max(5, Math.min(50, camera.position.z));
+      document.getElementById('zoom-slider').value = camera.position.z;
+    });
+
+    const startButton = document.getElementById('start-button');
+    startButton.addEventListener('click', () => {
+      if (planetState === 'exploded') {
+        resetPlanet();
+      } else if (planetState === 'ready') {
+        startCountdown(currentPlanetGroup);
+      } else if (planetState === 'counting') {
+        togglePause();
+      }
+    });
+    document.getElementById('left-arrow').addEventListener('click', () => transitionPlanet(1));
+    document.getElementById('right-arrow').addEventListener('click', () => transitionPlanet(-1));
+    document.getElementById('zoom-slider').addEventListener('input', () => {
+      camera.position.z = parseFloat(document.getElementById('zoom-slider').value);
+    });
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (planetState === 'exploded') {
+          resetPlanet();
+        } else if (planetState === 'ready') {
+          startCountdown(currentPlanetGroup);
+        } else if (planetState === 'counting') {
+          togglePause();
+        }
+      }
+    });
+
+    function togglePause() {
+      if (planetState !== 'counting') return;
+      isPaused = !isPaused;
+      startButton.innerText = isPaused ? 'Resume (Space)' : 'Pause (Space)';
+    }
+
+    function generateFibonacciSpherePoints(radius, count) {
+      const points = [];
+      const phi = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < count; i++) {
+        const y = 1 - (i / (count - 1)) * 2;
+        const r = Math.sqrt(1 - y * y) * radius;
+        const theta = phi * i;
+        points.push(new THREE.Vector3(
+          Math.cos(theta) * r,
+          y * radius,
+          Math.sin(theta) * r
+        ));
+      }
+      return points;
+    }
+
+    const blueColors = [0x0000ff, 0x0033cc, 0x0066ff, 0x3399ff];
+    const greenColors = [0x228B22, 0x32CD32, 0x66ff66, 0x90EE90];
+    function getEarthColor() {
+      const isBlue = Math.random() < 0.7;
+      return (isBlue ? blueColors : greenColors)[Math.floor(Math.random() * 4)];
+    }
+
+    function createRing(radiusOffset, count, planet, group) {
+      const ringGroup = new THREE.Group();
+      ringGroup.name = `ring${radiusOffset}`;
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2;
+        const ringRadius = planet.radius + radiusOffset + Math.random() * 0.5;
+        const ringGeom = new TextGeometry(String(planet.timer), { font, size: 0.3, height: 0.05 });
+        ringGeom.center();
+        const ringDigit = new THREE.Mesh(ringGeom, new THREE.MeshPhongMaterial({ color: 0xffff00, emissive: 0xffff00, emissiveIntensity: 0.5 }));
+        ringDigit.position.set(Math.cos(angle) * ringRadius, 0, Math.sin(angle) * ringRadius);
+        ringDigit.userData.originalPosition = ringDigit.position.clone();
+        ringDigit.userData.velocity = ringDigit.position.clone().normalize().multiplyScalar(0.5);
+        ringDigit.userData.isRingDigit = true;
+        ringGroup.add(ringDigit);
+      }
+      group.add(ringGroup);
+    }
+
+    function createPlanetGroup(planet) {
+      const group = new THREE.Group();
+      const baseDigitCount = Math.round(50 + (300 - 50) * ((planet.radius - 3) / (7 - 3)));
+      const digitCount = baseDigitCount * 2;
+      const points = generateFibonacciSpherePoints(planet.radius, digitCount);
+      const fontSize = planet.name === 'Sun' ? 0.5 : 0.0625 * planet.radius;
+      let jupiterRedSpotCount = 0;
+
+      points.forEach(point => {
+        let color;
+        if (planet.name === 'Earth') {
+          color = getEarthColor();
+        } else if (planet.name === 'Jupiter') {
+          if (Math.abs(point.y) < 0.1 * planet.radius && jupiterRedSpotCount < 4) {
+            color = 0x8B0000;
+            jupiterRedSpotCount++;
+          } else {
+            color = (Math.floor((point.y + planet.radius) / (planet.radius * 2) * 10) % 2) ? 0xffa500 : 0x8b4513;
+          }
+        } else {
+          color = planet.color || 0x00ffff;
+        }
+
+        const material = new THREE.MeshPhongMaterial({
+          color, emissive: color, emissiveIntensity: 0.3, transparent: true, opacity: 0.9
+        });
+        const digitGeometry = new TextGeometry(String(planet.timer), { font, size: fontSize, height: textHeight });
+        digitGeometry.center();
+        const digit = new THREE.Mesh(digitGeometry, material);
+        digit.position.copy(point);
+        digit.userData.originalPosition = point.clone();
+        digit.userData.velocity = point.clone().normalize().multiplyScalar(0.5);
+        group.add(digit);
+      });
+
+      const labelGeom = new TextGeometry(planet.name, { font, size: 1, height: 0.1 });
+      labelGeom.center();
+      const label = new THREE.Mesh(labelGeom, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      label.position.set(0, -planet.radius - 1.5, 0);
+      label.name = 'label';
+      group.add(label);
+
+      if (planet.name === 'Saturn') {
+        createRing(1.5, 40, planet, group);
+        createRing(2.5, 40, planet, group);
+        createRing(3.5, 40, planet, group);
+      }
+
+      group.rotation.x = 0;
+      return group;
+    }
+
+    function updateTextOrientation() {
+      currentPlanetGroup.traverse(child => {
+        if (child.isMesh && child.geometry.type === 'TextGeometry' && child.name !== 'label') {
+          child.lookAt(camera.position);
+        }
+      });
+    }
+
+    function startCountdown(group) {
+      if (countdownInterval) clearInterval(countdownInterval);
+      let countdownValue = planets[currentPlanetIndex].timer;
+      const newGeometry = new TextGeometry(String(countdownValue), { font, size: 0.0625 * planets[currentPlanetIndex].radius, height: textHeight });
+      newGeometry.center();
+      const ringGeometry = new TextGeometry(String(countdownValue), { font, size: 0.3, height: 0.05 });
+      ringGeometry.center();
+      group.traverse(child => {
+        if (child.isMesh && child.geometry.type === 'TextGeometry' && child.name !== 'label') {
+          child.geometry.dispose();
+          child.geometry = (child.userData.isRingDigit) ? ringGeometry : newGeometry;
+          child.position.copy(child.userData.originalPosition);
+        }
+      });
+
+      speak(countdownValue.toString());
+
+      planetState = 'counting';
+      isPaused = false;
+      startButton.innerText = 'Pause (Space)';
+      let lastUpdateTime = performance.now();
+
+      const updateCountdown = () => {
+        if (isPaused) {
+          countdownInterval = setTimeout(updateCountdown, 50);
+          return;
+        }
+        const currentTime = performance.now();
+        const elapsedSinceLast = (currentTime - lastUpdateTime) / 1000;
+        
+        if (elapsedSinceLast >= 1) {
+          countdownValue--;
+          lastUpdateTime = currentTime;
+          
+          const updatedGeometry = new TextGeometry(String(countdownValue), { font, size: 0.0625 * planets[currentPlanetIndex].radius, height: textHeight });
+          updatedGeometry.center();
+          const updatedRingGeometry = new TextGeometry(String(countdownValue), { font, size: 0.3, height: 0.05 });
+          updatedRingGeometry.center();
+          group.traverse(child => {
+            if (child.isMesh && child.geometry.type === 'TextGeometry' && child.name !== 'label') {
+              child.geometry.dispose();
+              child.geometry = (child.userData.isRingDigit) ? updatedRingGeometry : updatedGeometry;
+              child.position.copy(child.userData.originalPosition);
+            }
+          });
+
+          if (countdownValue > 0) {
+            speak(countdownValue.toString());
+          } else {
+            clearInterval(countdownInterval);
+            isAnimating = true;
+            animationType = 'implode';
+            animationStartTime = performance.now();
+            startButton.innerText = 'Push Space to Reset';
+            planetState = 'exploded';
+            return;
+          }
+        }
+
+        countdownInterval = setTimeout(updateCountdown, 50);
+      };
+
+      countdownInterval = setTimeout(updateCountdown, 50);
+    }
+
+    function easeInOut(t) {
+      return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    }
+
+    function transitionPlanet(direction) {
+      if (!currentPlanetGroup) return;
+      const oldGroup = currentPlanetGroup;
+      currentPlanetIndex = (currentPlanetIndex + direction + planets.length) % planets.length;
+      const newGroup = createPlanetGroup(planets[currentPlanetIndex]);
+      newGroup.position.x = direction > 0 ? -40 : 40;
+      newGroup.scale.set(1, 1, 1);
+      scene.add(newGroup);
+      currentPlanetGroup = newGroup;
+
+      const transitionDuration = 0.71;
+      const startTime = performance.now();
+      isTransitioning = true;
+
+      renderer.clear();
+      oldGroup.position.x = 0;
+      oldGroup.traverse(child => child.material && (child.material.opacity = 1));
+      renderer.render(scene, camera);
+
+      const transition = (currentTime) => {
+        const elapsed = (currentTime - startTime) / 1000;
+        let progress = elapsed / transitionDuration;
+        if (progress >= 1) progress = 1;
+
+        const easedProgress = easeInOut(progress);
+        const oldX = direction * 30 * easedProgress;
+        const newX = (direction > 0 ? -40 : 40) * (1 - easedProgress);
+
+        oldGroup.position.x = oldX;
+        oldGroup.traverse(child => child.material && (child.material.opacity = 1 - easedProgress));
+        newGroup.position.x = newX;
+
+        renderer.render(scene, camera);
+
+        if (progress < 1) {
+          requestAnimationFrame(transition);
+        } else {
+          renderer.clear();
+          scene.remove(oldGroup);
+          oldGroup.traverse(child => child.geometry && child.geometry.dispose());
+          newGroup.position.set(0, 0, 0);
+          planetState = 'ready';
+          startButton.innerText = 'Launch Countdown (Space)';
+          isTransitioning = false;
+        }
+      };
+      setTimeout(() => requestAnimationFrame(transition), 1);
+    }
+
+    function resetPlanet() {
+      if (planetState !== 'exploded') return;
+      isAnimating = true;
+      animationType = 'reemerge';
+      animationStartTime = performance.now();
+      planetState = 'ready';
+      startButton.innerText = 'Launch Countdown (Space)';
+      const initialGeometry = new TextGeometry(String(planets[currentPlanetIndex].timer), { font, size: 0.0625 * planets[currentPlanetIndex].radius, height: textHeight });
+      initialGeometry.center();
+      const initialRingGeometry = new TextGeometry(String(planets[currentPlanetIndex].timer), { font, size: 0.3, height: 0.05 });
+      initialRingGeometry.center();
+      currentPlanetGroup.traverse(child => {
+        if (child.isMesh && child.geometry.type === 'TextGeometry' && child.name !== 'label') {
+          child.geometry.dispose();
+          child.geometry = (child.userData.isRingDigit) ? initialRingGeometry : initialGeometry;
+        }
+      });
+    }
+
+    function animate(timestamp) {
+      if (!isTransitioning) {
+        if (!isAnimating) {
+          currentPlanetGroup.rotation.y += 0.001;
+          updateTextOrientation();
+        } else {
+          const elapsed = (timestamp - animationStartTime) / 1000;
+          if (animationType === 'implode') {
+            const implodeDuration = 0.54;
+            if (elapsed < implodeDuration) {
+              const factor = 1 - (elapsed / implodeDuration);
+              currentPlanetGroup.traverse(child => {
+                if (child.userData.originalPosition) {
+                  child.position.copy(child.userData.originalPosition).multiplyScalar(factor);
+                }
+              });
+            } else {
+              animationType = 'explode';
+              animationStartTime = timestamp;
+              digitFinalPositions = [];
+              currentPlanetGroup.traverse(child => {
+                if (child.userData.originalPosition) {
+                  const direction = child.userData.originalPosition.clone().normalize();
+                  const explodeDistance = 100;
+                  child.userData.finalPosition = child.position.clone().add(direction.multiplyScalar(explodeDistance));
+                  digitFinalPositions.push(child.userData.finalPosition.clone());
+                }
+              });
+            }
+          } else if (animationType === 'explode') {
+            const explodeDuration = 1.66;
+            if (elapsed < explodeDuration) {
+              const t = elapsed / explodeDuration;
+              currentPlanetGroup.traverse(child => {
+                if (child.userData.originalPosition) {
+                  child.position.lerp(child.userData.finalPosition, t);
+                  child.material.opacity = 1 - t;
+                }
+              });
+            } else {
+              isAnimating = false;
+            }
+          } else if (animationType === 'reemerge') {
+            const reemergeDuration = 1.4375;
+            if (elapsed < reemergeDuration) {
+              const t = elapsed / reemergeDuration;
+              currentPlanetGroup.traverse(child => {
+                if (child.userData.originalPosition) {
+                  child.position.lerp(child.userData.originalPosition, t);
+                  child.material.opacity = t;
+                }
+              });
+              updateTextOrientation();
+            } else {
+              isAnimating = false;
+            }
+          }
+        }
+        renderer.render(scene, camera);
+      }
+    }
+
+    new FontLoader().load(
+      'https://threejs.org/examples/fonts/helvetiker_regular.typeface.json',
+      (loadedFont) => {
+        font = loadedFont;
+        camera.position.z = 19.5;
+        camera.lookAt(0, 0, 0);
+        currentPlanetGroup = createPlanetGroup(planets[currentPlanetIndex]);
+        scene.add(currentPlanetGroup);
+        renderer.setAnimationLoop(animate);
+      },
+      undefined,
+      (error) => {
+        console.error('Font loading failed:', error);
+        alert('Failed to load font. App may not function correctly.');
+      }
+    );
+  </script>
+</body>
+</html>
