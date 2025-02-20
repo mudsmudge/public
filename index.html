@@ -174,18 +174,15 @@
       if (isMuted) window.speechSynthesis.cancel();
     });
 
-    // Updated speak function to speed up numbers 20 and above by 20%
+    // Updated speak function uses the utterance.volume property from the volume slider.
     const speak = (text) => {
       if (!isMuted) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
-        // Default rate is 1.2; if the number is 20 or above, increase the rate by 20%
         const value = parseInt(text, 10);
-        if (!isNaN(value) && value >= 20) {
-          utterance.rate = 1.2 * 1.2;
-        } else {
-          utterance.rate = 1.2;
-        }
+        utterance.rate = (!isNaN(value) && value >= 20) ? 1.2 * 1.2 : 1.2;
+        // Set the utterance volume from the slider (range 0 to 1)
+        utterance.volume = parseFloat(volumeSlider.value);
         window.speechSynthesis.speak(utterance);
       }
     };
