@@ -83,10 +83,30 @@
       #click-note { bottom: 10vh; }
       #zoom-slider { bottom: 3vh; }
     }
+
+    /* New media query for portrait orientation */
+    @media (orientation: portrait) {
+      #ui {
+        top: 6vh; /* Move down to second row */
+      }
+      #fullscreen-button {
+        top: 0.5vh; /* Keep on top row */
+        left: 0.5vw;
+      }
+      #audio-controls {
+        top: 0.5vh; /* Keep on top row */
+        right: 0.5vw;
+      }
+      #start-button {
+        display: block; /* Ensure it takes full width and moves to new line */
+        margin: 0 auto; /* Center horizontally */
+      }
+    }
   </style>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
+  <!-- Rest of the HTML remains unchanged -->
   <div id="ui">
     <button id="start-button" aria-label="Launch or pause countdown">Launch Countdown (Space)</button>
   </div>
@@ -100,6 +120,7 @@
   <input type="range" id="zoom-slider" min="5" max="50" value="19.5" step="0.1" role="slider" aria-label="Zoom level">
   <div id="click-note">Drag to rotate | Pinch/Scroll to zoom</div>
   <script type="module">
+    // ... JavaScript remains unchanged from previous version ...
     import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
     import { FontLoader } from 'https://cdn.skypack.dev/three@0.136.0/examples/jsm/loaders/FontLoader.js';
     import { TextGeometry } from 'https://cdn.skypack.dev/three@0.136.0/examples/jsm/geometries/TextGeometry.js';
